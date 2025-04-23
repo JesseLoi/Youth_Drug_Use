@@ -1,0 +1,992 @@
+---
+title: "Social Impacts on Youth Drugs Use"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+Let's clearly state our research question. We are interested in the effects of a youth's social environment on their use of marijuana. This may involve support from parents, support from friends, teachers, and one's overall community.
+
+```{r}
+library(tree)
+library(ggplot2)
+library(gbm)
+library(randomForest)
+set.seed(1)
+youth_data <- read.csv("https://raw.githubusercontent.com/JesseLoi/Youth_Drug_Use/refs/heads/main/youth_data1.csv")
+
+
+
+# View the first few rows
+head(youth_data)
+```
+
+Let's look at the data structure.
+
+```{r}
+str(youth_data)
+```
+We have 10,000 observations. This is plenty to work with, so we can split the training and test datasets half and half.
+
+
+
+Let's try out binary classification. Let's see if we can develop a model to check if we can detect the rate at which youth ever use marijuana, MRJFLAG. Let's make a naive model that uses all traits.
+
+Let's use a decision tree to start, and see how ensemble techniques can be used to enhance our investigation.
+
+
+Let's split the data into training and test sets.
+
+```{r}
+samp<-sample(1:nrow(youth_data),nrow(youth_data)/2)
+
+train<-youth_data[samp,]
+
+test<-youth_data[-samp,]
+
+```
+
+```{r}
+
+youth_data$MRJFLAG<-as.factor(youth_data$MRJFLAG)
+
+tree.MRJFLAG<-tree(factor(MRJFLAG)~. -IRALCFY	-IRMJFY	-IRCIGFM	-IRSMKLSS30N	-IRALCFM	-IRMJFM	-IRCIGAGE	-IRSMKLSSTRY	-IRALCAGE	-IRMJAGE	-ALCFLAG	-TOBFLAG	-ALCYDAYS	-MRJYDAYS	-ALCMDAYS	-MRJMDAYS	-CIGMDAYS	-SMKLSMDAYS -FRDMEVR2 -FRDMJMON, train)
+
+summary(tree.MRJFLAG)
+
+```
+
+This is a pretty good misclassification rate. Let's try our test error rate.
+
+```{r}
+pred<-predict(tree.MRJFLAG, test, type="class")
+
+table(pred, test$MRJFLAG)
+```
+
+```{r}
+
+bc_sim<-(224+428)/(sum(table(pred, test$MRJFLAG)))
+
+
+#Take accuracy
+
+bc_sim_acc<-(1-bc_sim)
+
+(224+428)/(sum(table(pred, test$MRJFLAG)))
+
+
+```
+
+It seems that we have a 87 percent accuracy rate, which is pretty good. This is even before cleaning the data. The point of this, however, was just to check.
+
+We can try taking the prevision and recall as well.
+
+```{r}
+bc_sim_prec<-368/(224+368)
+bc_sim_prec
+```
+Our precision is pretty low. This indicates a high level of false positives. In the case of marijuana, this might be acceptable given how unbalanced the data is. Because there are so few cases of marijuana, we might risk having a few false positives.
+
+Let's check recall
+
+```{r}
+bc_sim_recall<-368/(428+368)
+bc_sim_recall
+```
+Our recall rate is pretty low. However, recall that recall aims to lower the amount of false negatives, namely labelling someone as not using marijuana. Most youth don't, so it makes sense that our model labels mamy of them as not using marijuana. However, it is more important to us to correctly identify all those who use marijuana, so we should value having a higher recall score.
+
+```{r}
+metrics <- data.frame(
+  Metric = c("Accuracy", "Precision", "Recall","F1 Score"),
+  Value = c(bc_sim_acc, bc_sim_prec, bc_sim_recall, bc_sim_prec*bc_sim_recall/(bc_sim_prec+bc_sim_recall))
+)
+ggplot(data=metrics, aes(x=Metric, y=Value, fill=Metric))+geom_bar(stat="identity")+labs(title="Metrics for Simple Tree Classification")
+```
+
+
+Let's see if we can prune our tree.
+
+```{r}
+cv.MRJFLAG <- cv.tree(tree.MRJFLAG, FUN = prune.misclass)
+names(cv.MRJFLAG)
+cv.MRJFLAG
+```
+```{r}
+par(mfrow = c(1, 2))
+plot(cv.MRJFLAG$size, cv.MRJFLAG$dev, type = "b")
+plot(cv.MRJFLAG$k, cv.MRJFLAG$dev, type = "b")
+```
+Let's clean up the same plot.
+
+```{r}
+plot(cv.MRJFLAG$size, cv.MRJFLAG$dev, type = "b", xlab = "Tree Size", ylab = "Deviance", main = "Training Error for Decision Tree Pruning")
+```
+
+Let's locate an elbow point.
+It looks like a tree of size 3 is enough. Let's determine why.
+
+
+```{r}
+prune.MRJFLAG <- prune.misclass(tree.MRJFLAG, best = 3)
+plot(prune.MRJFLAG)
+text(prune.MRJFLAG, pretty = 0)
+```
+Our two variables are YFLMJMO (how youth feels about peers using marijuana monthly) and STNDSMJ (how many students in the youth's grade smoke marijuana. Here, we see that the youth is vulnerable to a wide host of factors. This follows in our general theme of investigating how social factors affect youth drug use.
+
+
+Let's test our accuracy.
+```{r}
+pred<-predict(prune.MRJFLAG, test, type="class")
+
+table(pred, test$MRJFLAG)
+```
+```{r}
+(224+428)/(sum(table(pred, test$MRJFLAG)))
+```
+
+We have about an 87 percent accuracy rate, which is pretty good but not any better from our process of pre-pruning. What this tells us is that our tree might not have really been pruned. Let's start with our social variables and proceed forward with a slightly more diverse tree.
+
+
+Since we are following the trend of social factors, let's use TCHGJOB (whether or not a teacher has told the student they did a good job), STNDSMJ (whether or not grademates use marijuana), PRGDJOB2 (parents tell youth they did a good job), PRPROUD2 (parents tell youth they are proud), FRDMEVR2 (what youths think of close friends smoking more than 1 pack a day), PRTALK3 (youth talked to parent about alcohol, tobacco, and drugs), PRBSOLV2 (youth participated in a self esteem group), PRVDRGO2 (participated in a substance prevention program), GRPCNSL2 (participated in a program to help with substance use), DRPRVME3 (youth sees drug prevention messaging outside school), ANYEDUC3 (youth had drug education in school), and YFLMJMO (what the youth thinks of peers using marijuana monthly).
+
+Before we start, let's create a new data frame to apply transformations to the data.
+
+```{r}
+youth_data_binary<-youth_data
+
+youth_data_binary$MRJFLAG<-as.factor(youth_data_binary$MRJFLAG)
+youth_data_binary$TCHGJOB<-as.factor(youth_data_binary$TCHGJOB)
+youth_data_binary$STNDSMJ<-as.factor(youth_data_binary$STNDSMJ)
+youth_data_binary$PRGDJOB2<-as.factor(youth_data_binary$PRGDJOB2)
+youth_data_binary$PRPROUD2<-as.factor(youth_data_binary$PRPROUD2)
+youth_data_binary$FRDMEVR2<-as.factor(youth_data_binary$FRDMEVR2)
+youth_data_binary$PRTALK3<-as.factor(youth_data_binary$PRBSOLV2)
+youth_data_binary$PRVDRGO2<-as.factor(youth_data_binary$PRVDRGO2)
+youth_data_binary$GRPCNSL2<-as.factor(youth_data_binary$GRPCNSL2)
+youth_data_binary$DRPRVME3<-as.factor(youth_data_binary$DRPRVME3)
+youth_data_binary$ANYEDUC3<-as.factor(youth_data_binary$ANYEDUC3)
+youth_data_binary$YFLMJMO<-as.factor(youth_data_binary$YFLMJMO)
+```
+
+Let's try recreating our basic tree.
+
+
+```{r}
+samp<-sample(1:nrow(youth_data_binary),nrow(youth_data_binary)/2)
+
+train<-youth_data_binary[samp,]
+
+test<-youth_data_binary[-samp,]
+
+```
+
+
+
+```{r}
+tree.MRJFLAG_binary<-tree(factor(MRJFLAG)~TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + YFLMJMO, train)
+
+summary(tree.MRJFLAG_binary)
+
+```
+```{r}
+plot(tree.MRJFLAG_binary)
+text(tree.MRJFLAG_binary, pretty = 0)
+
+```
+
+
+Our misclassification error rate appears slightly higher. Let's check our test error.
+
+```{r}
+pred<-predict(tree.MRJFLAG_binary, test, type="class")
+
+table(pred, test$MRJFLAG)
+```
+```{r}
+(247+422)/sum(table(pred, test$MRJFLAG))
+```
+Surprisingly, our test error rate is even lower than our training error rate.
+
+I suspect the lack of change is because our model is once again prioritizing YFLMJMO and STNDSMJ but also adding FRDMEVR2 (what youths think of friends smoking more than a pack a day).
+
+Let's visualize our data.
+
+```{r}
+
+bc_sim<-(242+437)/(sum(table(pred, test$MRJFLAG)))
+
+
+#Take accuracy
+
+bc_sim_acc<-(1-bc_sim)
+
+(224+428)/(sum(table(pred, test$MRJFLAG)))
+
+
+```
+
+It seems that we have a 87 percent accuracy rate, which is pretty good.
+
+We can try taking the prevision and recall as well.
+
+```{r}
+bc_sim_prec<-368/(224+368)
+bc_sim_prec
+```
+Our precision is pretty low. This indicates a high level of false positives. In the case of marijuana, this might be acceptable given how unbalanced the data is. Because there are so few cases of marijuana, we might risk having a few false positives.
+
+Let's check recall
+
+```{r}
+bc_sim_recall<-368/(428+368)
+bc_sim_recall
+```
+Our recall rate is pretty low. However, recall that recall aims to lower the amount of false negatives, namely labelling someone as not using marijuana. Most youth don't, so it makes sense that our model labels mamy of them as not using marijuana. However, it is more important to us to correctly identify all those who use marijuana, so we should value having a higher recall score.
+
+```{r}
+metrics <- data.frame(
+  Metric = c("Accuracy", "Precision", "Recall","F1 Score"),
+  Value = c(bc_sim_acc, bc_sim_prec, bc_sim_recall, bc_sim_prec*bc_sim_recall/(bc_sim_prec+bc_sim_recall))
+)
+ggplot(data=metrics, aes(x=Metric, y=Value, fill=Metric))+geom_bar(stat="identity")+labs(title="Metrics for Simple Tree Classification")
+```
+
+
+Let's see if we can use random forest, varying mtry, to see if we can involve the other variables. Let's clean the data once more to remove NA values, since random forest does not allow that.
+
+
+```{r}
+youth_data_RF<-na.omit(youth_data_binary)
+```
+
+
+```{r}
+samp<-sample(1:nrow(youth_data_RF),nrow(youth_data_RF)/2)
+
+train<-youth_data_RF[samp,]
+
+test<-youth_data_RF[-samp,]
+
+```
+
+
+```{r}
+
+tree.MRJFLAG_RF<-randomForest(MRJFLAG~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + YFLMJMO, data=train, mtry=6, importance=TRUE, ntree=500)
+
+```
+```{r}
+print(tree.MRJFLAG_RF)
+```
+Our misclassification rate is 14.92, which is even worse. It seems that an emsemble does a worse job. However, I suspect this might be due to an imbalance in the data, since there is a ton of non-marijuna users. This is therefore a huge case of class imbalance. In fact, we see that we have over a 60 percent misclassification rate when we are dealing with a marijuana user.
+
+Let's double check our test error.
+
+```{r}
+pred<-predict(tree.MRJFLAG_RF, test, type="class")
+
+table(pred, test$MRJFLAG)
+```
+```{r}
+(186+374)/(sum(table(pred,test$MRJFLAG)))
+```
+Still around an 86 percent misclassification rate, which is worse than our simple tree by a small margin.
+
+
+Let's try taking precision and recall.
+
+
+___________________________
+
+
+```{r}
+
+bc_rf<-(186+374)/(sum(table(pred, test$MRJFLAG)))
+
+
+#Take accuracy
+
+bc_rf_acc<-(1-bc_rf)
+
+(186+374)/(sum(table(pred, test$MRJFLAG)))
+
+
+```
+
+It seems that we have a 86 percent accuracy rate, which is pretty good. This is even before cleaning the data. The point of this, however, was just to check.
+
+We can try taking the prevision and recall as well.
+
+```{r}
+bc_rf_prec<-272/(191+272)
+bc_rf_prec
+```
+Our precision is pretty low. This indicates a high level of false positives. In the case of marijuana, this might be acceptable given how unbalanced the data is. Because there are so few cases of marijuana, we might risk having a few false positives.
+
+Let's check recall
+
+```{r}
+bc_rf_recall<-272/(420+272)
+bc_rf_recall
+```
+
+
+```{r}
+metrics <- data.frame(
+  Metric = c("Accuracy", "Precision", "Recall","F1 Score"),
+  Value = c(bc_rf_acc, bc_rf_prec, bc_rf_recall, bc_rf_prec*bc_rf_recall/(bc_rf_prec+bc_rf_recall))
+)
+ggplot(data=metrics, aes(x=Metric, y=Value, fill=Metric))+geom_bar(stat="identity")+labs(title="Metrics for Random Forest Classification")
+```
+
+________________________
+
+
+We can still try to fine-tune our parameters, however, by making use of the mtry variable.
+
+```{r}
+trees<-numeric(11)
+errors<-numeric(11)
+for (i in 1:11){
+  
+tree.MRJFLAG_RF<-randomForest(MRJFLAG~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + YFLMJMO, data=train, mtry=i, importance=TRUE, ntree=500)
+pred<-predict(tree.MRJFLAG_RF, test, type="class")
+trees[i]<-i
+errors[i]<-1-sum(diag(table(pred,test$MRJFLAG)))/sum(table(pred,test$MRJFLAG))
+}
+plot(x=trees, y=errors,type="b",pch=19, xlab = "Variables Used", ylab = "Miclassification Error", main = "Finetuning Variable Number for Binary RandomForest")
+```
+
+
+Let's consider boosting to try to solve our problem. Recall that boosting can adjust to fit errors more effectively, therefore lowering bias. Let's try it.
+
+I noticed that GBM requires a numeric response variable, so I convert it back.
+
+```{r}
+train$MRJFLAG <- as.numeric(as.character(train$MRJFLAG))
+test$MRJFLAG <- as.numeric(as.character(test$MRJFLAG))
+```
+
+
+```{r}
+boost.MRJFLAG <- gbm(MRJFLAG ~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + YFLMJMO, data = train, distribution = "bernoulli", n.trees = 1000, shrinkage=0.011)
+pred<-predict(boost.MRJFLAG, test, type="response")
+pred_class <- ifelse(pred > 0.5, 1, 0)
+table(pred_class, test$MRJFLAG)
+```
+```{r}
+(156+357)/sum(table(pred_class,test$MRJFLAG))
+```
+```{r}
+summary(boost.MRJFLAG)
+```
+
+
+We were able to decrease our error to about 12.4 percent. This barely beats out our simple tree by a small percentage. However, we have found out that boosting deals with bias much more effectively than random forest.
+
+Let's try to fine-tune our shrinkage parameter to better improve our results.
+
+```{r}
+shrink <- numeric(20)
+errors <- numeric(20)
+
+for (i in 1:20) {
+  boost.MRJFLAG <- gbm(MRJFLAG ~ TCHGJOB + STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + YFLMJMO,data = train, distribution = "bernoulli",n.trees = 1000,shrinkage = i * 0.001,       
+  )
+  
+  shrink[i] <- i * 0.001  
+  pred_prob <- predict(boost.MRJFLAG, newdata = test, n.trees = 1000, type = "response")
+  pred_class <- ifelse(pred_prob > 0.5, 1, 0)
+  error_rate <- 1 - sum(diag(table(pred_class, test$MRJFLAG))) / sum(table(pred_class, test$MRJFLAG))  
+  errors[i] <- error_rate  
+}
+
+plot(shrink, errors)
+
+```
+0.006 seems to give us an even lower error by a small margin.
+
+
+```{r}
+boost.MRJFLAG <- gbm(MRJFLAG ~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + YFLMJMO, data = train, distribution = "bernoulli", n.trees = 1000, shrinkage=0.006)
+pred<-predict(boost.MRJFLAG, test, type="response")
+pred_class <- ifelse(pred > 0.5, 1, 0)
+table(pred_class, test$MRJFLAG)
+```
+
+
+```{r}
+(130+417)/sum(table(pred_class,test$MRJFLAG))
+```
+
+
+
+The lowest error rate so far is a 13.22 percent misclassification rate, which is pretty good. It seems that our error won't be getting below 12 percent, however.
+
+
+Let's check our precision and recall as well.
+
+
+_____________________
+
+
+```{r}
+
+bc_boost<-(130+417)/(sum(table(pred, test$MRJFLAG)))
+
+
+#Take accuracy
+
+bc_boost_acc<-(1-bc_boost)
+
+(130+417)/(sum(table(pred, test$MRJFLAG)))
+
+
+```
+
+It seems that we have a 86 percent accuracy rate, which is pretty good. This is even before cleaning the data. The point of this, however, was just to check.
+
+We can try taking the prevision and recall as well.
+
+```{r}
+bc_boost_prec<-275/(130+275)
+bc_boost_prec
+```
+Our precision is pretty low. This indicates a high level of false positives. In the case of marijuana, this might be acceptable given how unbalanced the data is. Because there are so few cases of marijuana, we might risk having a few false positives.
+
+Let's check recall
+
+```{r}
+bc_boost_recall<-275/(417+275)
+bc_boost_recall
+```
+
+
+```{r}
+metrics <- data.frame(
+  Metric = c("Accuracy", "Precision", "Recall","F1 Score"),
+  Value = c(bc_boost_acc, bc_boost_prec, bc_boost_recall, bc_boost_prec*bc_boost_recall/(bc_boost_prec+bc_boost_recall))
+)
+ggplot(data=metrics, aes(x=Metric, y=Value, fill=Metric))+geom_bar(stat="identity")+labs(title="Metrics for Boost Classification")
+```
+
+___________________
+
+
+Let's compare all three.
+
+```{r}
+metrics <- data.frame(
+  Technique = c("Simple Tree", "Random Forest", "Boost"),
+  Accuracy = c(bc_sim_acc, bc_rf_acc, bc_boost_acc))
+
+  ggplot(data=metrics, aes(x=Technique, y=Accuracy, fill=Technique))+geom_bar(stat="identity")+labs(title="Comparison of Techniques for Binary Classification")
+```
+
+
+Let's now try some multi-class classification problems.
+
+To do this, let's create a new classification by using IRMJAGE for our cases, which is namely the youth's  first age doing marijuana. Let's create a multiclassification problem and split age into several buckets.
+
+```{r}
+youth_data_used<-youth_data[youth_data$IRMJAGE<990,]
+```
+
+```{r}
+hist(youth_data_used$IRMJAGE,main = "Age Distribution for Youth Marijuana Use",
+     xlab = "Age of First Use")
+```
+This histogram gives us a better idea on how to split up our data. Let's split them into younger than 13, age 13, age 14, and ages older than 14.
+
+```{r}
+youth_data_used$mrj_age_group <- cut(
+  youth_data_used$IRMJAGE,
+  breaks = c(-Inf, 12, 13, 14, 15, Inf),
+  labels = c("child", "12-13", "13-14", "14-15", "16+"),
+  right = TRUE
+)
+```
+
+
+We can now use multi classification on this.
+
+```{r}
+ggplot(youth_data_used, aes(x = mrj_age_group)) + geom_bar() + labs(title="Corrected Age Distribution", x="Age Group")
+```
+
+However, we might benefit from  comparing our group to those who did not take marijuana either.
+
+```{r}
+youth_data$mrj_age_group <- cut(
+  youth_data$IRMJAGE,
+  breaks = c(-Inf, 12,13, 14, 15, 19,  Inf),
+  labels = c("child","12-13", "13-14", "14-15", "16-18", "never"),
+  right = TRUE
+)
+```
+
+```{r}
+ggplot(youth_data, aes(x = mrj_age_group)) + geom_bar()+
+  labs(title = "Age Youth First Used Marijuana", x = "Age Group", y = "Count") 
+```
+
+For now, let's perform the classification on the dataset that is more full.
+
+
+Given the focus on social influence, let's see what friends and family have to say about when youths start using marijuana.
+
+
+Let's determine which categories to use. We want to see which social factors lead to when a youth will start using marijuana.
+
+Let's use TCHGJOB (), STNDSMJ, PRGDJOB2, PRPROUD2, FRDMEVR2, PRTALK3, PRBSOLV2, PRVDRGO2, GRPCNSL2, DRPRVME3, and ANYEDUC3
+
+
+Let's split the data. 
+
+
+```{r}
+youth_data_forest<-na.omit(youth_data)
+```
+
+Now, let's properly convert the data into factor form. 
+
+```{r}
+youth_data_forest$mrj_age_group<-as.factor(youth_data_forest$mrj_age_group)
+youth_data_forest$TCHGJOB<-as.factor(youth_data_forest$TCHGJOB)
+youth_data_forest$STNDSMJ<-as.factor(youth_data_forest$STNDSMJ)
+youth_data_forest$PRGDJOB2<-as.factor(youth_data_forest$PRGDJOB2)
+youth_data_forest$PRPROUD2<-as.factor(youth_data_forest$PRPROUD2)
+youth_data_forest$FRDMEVR2<-as.factor(youth_data_forest$FRDMEVR2)
+youth_data_forest$PRTALK3<-as.factor(youth_data_forest$PRBSOLV2)
+youth_data_forest$PRVDRGO2<-as.factor(youth_data_forest$PRVDRGO2)
+youth_data_forest$GRPCNSL2<-as.factor(youth_data_forest$GRPCNSL2)
+youth_data_forest$DRPRVME3<-as.factor(youth_data_forest$DRPRVME3)
+youth_data_forest$ANYEDUC3<-as.factor(youth_data_forest$ANYEDUC3)
+```
+
+
+
+```{r}
+samp<-sample(1:nrow(youth_data_forest),nrow(youth_data_forest)/2)
+
+train<-youth_data_forest[samp,]
+
+test<-youth_data_forest[-samp,]
+```
+
+
+Now, we must clean the data. We realize that the random forest function does not allow NA values. Therefore, we need to remove all NA values.
+
+
+
+```{r}
+
+bag.mrj_age_group<-randomForest(mrj_age_group~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3, data=train, mtry=11, importance=TRUE)
+
+
+bag.mrj_age_group
+
+```
+As we realize, our model is pretty bad at classifying. Because of how many "never" results there were, we notice that our model spend too much effort prioritizing "never" results at the cost of the other results. Let's re-do this but with a population that has already tried marijuana.
+
+
+```{r}
+youth_data_forest<-na.omit(youth_data_used)
+```
+
+Now, let's properly convert the data into factor form. 
+
+```{r}
+youth_data_forest$mrj_age_group<-as.factor(youth_data_forest$mrj_age_group)
+youth_data_forest$TCHGJOB<-as.factor(youth_data_forest$TCHGJOB)
+youth_data_forest$STNDSMJ<-as.factor(youth_data_forest$STNDSMJ)
+youth_data_forest$PRGDJOB2<-as.factor(youth_data_forest$PRGDJOB2)
+youth_data_forest$PRPROUD2<-as.factor(youth_data_forest$PRPROUD2)
+youth_data_forest$FRDMEVR2<-as.factor(youth_data_forest$FRDMEVR2)
+youth_data_forest$PRTALK3<-as.factor(youth_data_forest$PRBSOLV2)
+youth_data_forest$PRVDRGO2<-as.factor(youth_data_forest$PRVDRGO2)
+youth_data_forest$GRPCNSL2<-as.factor(youth_data_forest$GRPCNSL2)
+youth_data_forest$DRPRVME3<-as.factor(youth_data_forest$DRPRVME3)
+youth_data_forest$ANYEDUC3<-as.factor(youth_data_forest$ANYEDUC3)
+#We will use poverty level later, but I include it here for convenience.
+youth_data_forest$POVERTY3<-ordered(youth_data_forest$POVERTY3)
+```
+
+
+
+```{r}
+samp<-sample(1:nrow(youth_data_forest),nrow(youth_data_forest)/2)
+
+train<-youth_data_forest[samp,]
+
+test<-youth_data_forest[-samp,]
+```
+
+
+Now, we must clean the data. We realize that the random forest function does not allow NA values. Therefore, we need to remove all NA values.
+
+
+
+
+```{r}
+
+bag.mrj_age_group<-randomForest(mrj_age_group~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3, data=train, mtry=11, importance=TRUE)
+
+
+bag.mrj_age_group
+
+```
+Our model is pretty bad. This may be because we don't have many numerical variables.
+
+We will expect our test error to be even worse.
+
+```{r}
+pred<-predict(bag.mrj_age_group, test, type="class")
+table(test$mrj_age_group, pred)
+```
+```{r}
+x<-sum(table(test$mrj_age_group, pred))
+
+mc_acc_bag<-(9+27+46+45+14)/x
+
+(9+27+46+45+14)/x
+
+```
+We only have a 21 percent test accuracy. This is even worse. Our model is about as good as random guessing.
+
+
+
+Let's first try to add more variables.
+
+Let's use include poverty level (POVERTY3). Perhaps higher poverty may impact the ability of when someone starts using marijuana, either by making the situation more desperate or by allowing more access to marijuana. 
+
+
+
+
+```{r}
+youth_data_forest$POVERTY3<-as.factor(youth_data_forest$POVERTY3)
+```
+
+
+
+Let's transform when the youth first uses smokeless tobacco and alcohol.
+
+```{r}
+
+youth_data_used$s_tobac_age <- cut(
+  youth_data_used$IRSMKLSSTRY,
+  breaks = c(-Inf, 12, 13, 14, 15, Inf),
+  labels = c("child", "12-13", "13-14", "14-15", "16+"),
+  right = TRUE
+)
+
+
+youth_data_used$alcohol_age <- cut(
+  youth_data_used$IRALCAGE,
+  breaks = c(-Inf, 12, 13, 14, 15, Inf),
+  labels = c("child", "12-13", "13-14", "14-15", "16+"),
+  right = TRUE
+)
+
+
+```
+Let's also order our categorical variables and re-make our youth_data_random_forest set.
+
+```{r}
+
+youth_data_forest<-na.omit(youth_data_used)
+youth_data_forest$s_tobac_age<-ordered(youth_data_forest$s_tobac_age)
+youth_data_forest$alcohol_age<-ordered(youth_data_forest$alcohol_age)
+
+#Let's also split the data.
+
+samp<-sample(1:nrow(youth_data_forest),nrow(youth_data_forest)/2)
+
+train<-youth_data_forest[samp,]
+
+test<-youth_data_forest[-samp,]
+```
+
+
+```{r}
+bag.mrj_age_group<-randomForest(mrj_age_group~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3+POVERTY3+s_tobac_age+alcohol_age, data=train, mtry=11, importance=TRUE)
+
+
+bag.mrj_age_group
+```
+```{r}
+pred<-predict(bag.mrj_age_group, test, type="class")
+sum(diag(table(pred, test$mrj_age_group)))/sum(table(pred,test$mrj_age_group))
+```
+```{r}
+table(pred, test$mrj_age_group)
+```
+```{r}
+mc_bag_acc<-sum(diag(table(pred, test$mrj_age_group)))/sum(table(pred, test$mrj_age_group))
+```
+
+
+It seems that adding the the multi-level variables increases our accuracy by 10 percent. Let's compare it with a standard tree with the multi-level variables.
+
+```{r}
+tree.mrj_age_group<-tree(mrj_age_group ~ POVERTY3+s_tobac_age+alcohol_age, data=train)
+
+summary(tree.mrj_age_group)
+```
+```{r}
+pred<-predict(tree.mrj_age_group, test, type="class")
+sum(diag(table(pred, test$mrj_age_group)))/sum(table(pred,test$mrj_age_group))
+```
+Our success rate is 30 percent. 
+
+```{r}
+table(pred, test$mrj_age_group)
+```
+
+
+```{r}
+varImpPlot(bag.mrj_age_group)
+```
+
+
+Let's compute the precision and recall 
+
+```{r}
+
+mc_sim_acc<-(112+76)/(sum(table(pred, test$mrj_age_group)))
+
+
+(112+76)/(sum(table(pred, test$mrj_age_group)))
+
+
+```
+Let's take precision and recall for the group aged 14-15
+
+```{r}
+mc_sim_prec<-112/(42+71+122+112+112)
+mc_sim_prec
+```
+
+
+Let's check recall
+
+```{r}
+mc_sim_recall<-112/(112+17)
+mc_sim_recall
+```
+
+
+```{r}
+metrics <- data.frame(
+  Metric = c("Accuracy", "Precision", "Recall","F1 Score"),
+  Value = c(mc_sim_acc, mc_sim_prec, mc_sim_recall, mc_sim_prec*mc_sim_recall/(mc_sim_prec+mc_sim_recall))
+)
+ggplot(data=metrics, aes(x=Metric, y=Value, fill=Metric))+geom_bar(stat="identity")+labs(title="Metrics for Simple Tree Multiclassification")
+```
+
+Let's create a plot to compare our three methods.
+
+
+```{r}
+metrics <- data.frame(
+  Technique = c("Simple Tree", "Bootstrap Aggregate"),
+  Accuracy = c(mc_sim_acc, mc_bag_acc))
+ggplot(data=metrics, aes(x=Technique, y=Accuracy, fill=Technique))+geom_bar(stat="identity")+labs(title="Techniques for Multiclassification")
+```
+
+
+
+
+
+SECTION 3
+
+Let's see if we can use regression to determine how many days a year that a youth would use marijuana. Let's start first by analyzing social factors around them and then seeing what we can predict.
+
+
+To do this, let's clean the marijuana frequency for the past year, because IRMJFY has two values 991 and 993, which indicate never using marijuana and not using marijuana the past year respectively. Let's see how large each is.
+
+```{r}
+table(youth_data$IRMJFY)
+```
+We notice 8971 entries in the "never" tried marijuna category. For worry that the data becomes too unbalanced, let's exclude entries with 991 and set 993 to 0, which makes sense since that indicates no marijuana the past year.
+
+```{r}
+youth_data_mrj_freq<- youth_data[youth_data$IRMJFY != 991, ]
+
+youth_data_mrj_freq$IRMJFY<-ifelse(youth_data_mrj_freq$IRMJFY==993, 0, youth_data_mrj_freq$IRMJFY)
+
+```
+
+Now we can remove all rows with an NA value in IRMJFY, since we would have nothing to predict.
+
+```{r}
+youth_data_mrj_freq<-subset(youth_data_mrj_freq, !is.na(IRMJFY))
+```
+
+We notice here that we have much less data, only 1590.
+
+```{r}
+str(youth_data_mrj_freq$IRMJFY)
+```
+```{r}
+ggplot(data=youth_data_mrj_freq, aes(x=youth_data_mrj_freq$IRMJFY))+geom_boxplot()+labs(x="Days Used Marijuana Per Year", title="Distribution of Marijuana Use Per Year")
+```
+
+
+Let's start with the listed social factors and add on a few more numeric variables.
+
+```{r}
+youth_data_mrj_freq$TCHGJOB<-as.factor(youth_data_mrj_freq$TCHGJOB)
+youth_data_mrj_freq$STNDSMJ<-as.factor(youth_data_mrj_freq$STNDSMJ)
+youth_data_mrj_freq$PRGDJOB2<-as.factor(youth_data_mrj_freq$PRGDJOB2)
+youth_data_mrj_freq$PRPROUD2<-as.factor(youth_data_mrj_freq$PRPROUD2)
+youth_data_mrj_freq$FRDMEVR2<-as.factor(youth_data_mrj_freq$FRDMEVR2)
+youth_data_mrj_freq$PRTALK3<-as.factor(youth_data_mrj_freq$PRBSOLV2)
+youth_data_mrj_freq$PRVDRGO2<-as.factor(youth_data_mrj_freq$PRVDRGO2)
+youth_data_mrj_freq$GRPCNSL2<-as.factor(youth_data_mrj_freq$GRPCNSL2)
+youth_data_mrj_freq$DRPRVME3<-as.factor(youth_data_mrj_freq$DRPRVME3)
+youth_data_mrj_freq$ANYEDUC3<-as.factor(youth_data_mrj_freq$ANYEDUC3)
+youth_data_mrj_freq$POVERTY3<-as.factor(youth_data_mrj_freq$POVERTY3)
+
+```
+
+However, let's also use alcohol frequency. But to do so, let's make the same transformations.
+
+Normally, we would remove 991, but we can instead treat 991 as 0 days used alcohol because unbalanced data is no longer a worry when it comes to a predictor variable (it would be negative)
+```{r}
+
+youth_data_mrj_freq$IRALCFY<-ifelse(youth_data_mrj_freq$IRALCFY==991, 0, youth_data_mrj_freq$IRALCFY)
+
+youth_data_mrj_freq$IRALCFY<-ifelse(youth_data_mrj_freq$IRALCFY==993, 0, youth_data_mrj_freq$IRALCFY)
+
+```
+
+
+Let's also try comparing it with monthly smokeless tobacco frequency (IRSMKLSS30N), monthly cigar frequency (IRCIGFM).
+
+
+The monthly correlate to 991 is 91 and the correlate to 993 is 93, so let's clean those. However, let's not remove 91, but convert 93 to 0.
+
+```{r}
+
+youth_data_mrj_freq$IRSMKLSS30N<-ifelse(youth_data_mrj_freq$IRSMKLSS30N==91, 0, youth_data_mrj_freq$IRSMKLSS30N)
+youth_data_mrj_freq$IRSMKLSS30N<-ifelse(youth_data_mrj_freq$IRSMKLSS30N==93, 0, youth_data_mrj_freq$IRSMKLSS30N)
+
+youth_data_mrj_freq$IRCIGFM<-ifelse(youth_data_mrj_freq$IRCIGFM==91, 0, youth_data_mrj_freq$IRCIGFM)
+youth_data_mrj_freq$IRCIGFM<-ifelse(youth_data_mrj_freq$IRCIGFM==93, 0, youth_data_mrj_freq$IRCIGFM)
+
+```
+
+```{r}
+samp<-sample(1:nrow(youth_data_mrj_freq),nrow(youth_data_mrj_freq)/2)
+
+train<-youth_data_mrj_freq[samp,]
+
+test<-youth_data_mrj_freq[-samp,]
+```
+
+
+Let's now perform a simple regression tree and update it with an advanced technique.
+
+```{r}
+tree.mrj_reg<-tree(IRMJFY~TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + POVERTY3 + IRSMKLSS30N + IRCIGFM +IRALCFY, train )
+
+summary(tree.mrj_reg)
+
+```
+It seems that, from the distribution of residuals, we aren't doing too bad between the 1st and 3rd quartiles, being only a month off. Let's check the test MSE.
+
+```{r}
+pred<-predict(tree.mrj_reg, newdata=test)
+mean((test$IRMJFY-pred)**2)
+
+r_sim_mse<-mean((test$IRMJFY-pred)**2)
+
+```
+
+This is a pretty large MSE.
+
+```{r}
+plot(tree.mrj_reg)
+text(tree.mrj_reg, pretty = 0)
+```
+
+Let's use boosting to try to improve our results.
+
+```{r}
+set.seed(1)
+boost.mrj_reg <- gbm(IRMJFY ~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + POVERTY3 + IRSMKLSS30N + IRCIGFM +IRALCFY, data = train,
+    distribution = "gaussian", n.trees = 1000)
+```
+
+
+```{r}
+summary(boost.mrj_reg)
+```
+
+Let's take a look at the range of our most impactful variables.
+
+```{r}
+plot(boost.mrj_reg, i = "IRALCFY")
+plot(boost.mrj_reg, i = "DRPRVME3")
+```
+Now let's check our test MSE after boosting.
+
+```{r}
+pred<-predict(boost.mrj_reg, test)
+mean((test$IRMJFY-pred)**2)
+
+r_boost_mse<-mean((test$IRMJFY-pred)**2)
+```
+Our test MSE is only marginally better. Let's fine tune our shrinkage parameter here.
+
+```{r}
+
+shrink<-numeric(20)
+errors<-numeric(20)
+for (i in 1:20){
+boost.mrj_reg <- gbm(IRMJFY ~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + POVERTY3 + IRSMKLSS30N + IRCIGFM +IRALCFY, data = train,
+    distribution = "gaussian", n.trees = 500, shrinkage=i*0.001)
+  shrink[i]<-i*0.001
+  test.pred<- predict(boost.mrj_reg, newdata = test, n.trees = 1000)
+  test.mse<-mean((test.pred-test$IRMJFY)**2)
+  errors[i]<-test.mse
+}
+plot(y=errors, x=shrink, xlab = "Shrinkage Rate", pch=19, type="b",
+  ylab = "MSE", 
+  main = "Shrink Finetuning for Number of Days of Marijuana Use a Year")
+```
+It looks like we should use 0.011 as our shrink rate, since it rates fairly low.
+
+```{r}
+boost.mrj_reg <- gbm(IRMJFY ~ TCHGJOB+STNDSMJ + PRGDJOB2 + PRPROUD2 + FRDMEVR2 + PRTALK3 + PRBSOLV2 + PRVDRGO2 + GRPCNSL2 + DRPRVME3 + ANYEDUC3 + POVERTY3 + IRSMKLSS30N + IRCIGFM +IRALCFY, data = train, distribution = "gaussian", n.trees = 1000, shrinkage=0.011)
+test.pred<- predict(boost.mrj_reg, newdata = test, n.trees = 1000)
+mean((test.pred-test$IRMJFY)**2)
+
+r_boost_tune_mse<-mean((test.pred-test$IRMJFY)**2)
+```
+We were able to decrease our MSE a little bit more. Let's reconsider our most useful variables.
+
+```{r}
+summary(boost.mrj_reg)
+```
+
+
+Surprisingly, we have different variables being the most impactful. While IRALCFY remains the same, showing that alcohol usage correlates with marijuana frequency, we have cigarette frequency as playing a much larger role here.
+
+Let's plot our different metrics.
+
+Let's create a plot to compare our three methods.
+
+
+```{r}
+metrics <- data.frame(
+  Technique = c("Simple Tree", "Boosting", "Tuned Boosting"),
+  MSE = c(r_sim_mse, r_boost_mse, r_boost_tune_mse))
+ggplot(data=metrics, aes(x=Technique, y=MSE, fill=Technique))+geom_bar(stat="identity")+labs(title="Techniques for Regression")
+```
+
+
+
